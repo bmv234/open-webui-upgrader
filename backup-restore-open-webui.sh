@@ -78,6 +78,89 @@ create_backup() {
     fi
 }
 
+# Function to restore from backup
+restore_backup() {
+    local backup_file="$1"
+    
+    if [ ! -f "$backup_file" ]; then
+        echo -e "${RED}Error: Backup file not found: $backup_file${NC}"
+        exit 1
+    fi
+    
+    echo -e "${RED}WARNING: This will overwrite all existing Open WebUI data!${NC}"
+    echo -e "${RED}Any changes made since the backup will be lost.${NC}"
+    echo -e "${BLUE}Backup to restore: $backup_file${NC}"
+    echo
+    read -p "Are you sure you want to proceed with the restore? (yes/no): " confirm
+    
+    if [[ ! "$confirm" =~ ^[Yy][Ee][Ss]$ ]]; then
+        echo "Restore cancelled."
+        exit 0
+    fi
+    
+    echo
+    echo -e "${BLUE}Starting restore process...${NC}"
+    
+    # Stop the container if it's running
+    if docker ps | grep -q "$WEBUI_CONTAINER"; then
+        echo "Stopping Open WebUI container..."
+        docker stop "$WEBUI_CONTAINER"
+    fi
+    
+    # Create a new volume if it doesn't exist
+    if ! docker volume ls | grep -q "open-webui"; then
+        echo "Creating new volume..."
+        docker volume create open-webui
+    fi
+    
+    # Restore the backup
+    echo "Restoring data..."
+    docker run --rm \
+        -v open-webui:/data \
+        -v "$(dirname "$backup_file")":/backup \
+        alpine sh -c "cd /data && tar xzf /backup/$(basename "$backup_file")"
+    
+    # Restart the container if it was running
+    if docker ps -a | grep -q "$WEBUI_CONTAINER"; then
+        echo "Starting Open WebUI container..."
+        docker start "$WEBUI_CONTAINER"
+    fi
+    
+    echo -e "${GREEN}✅ Restore completed successfully!${NC}"
+}
+
+# Function to list available backups
+list_backups() {
+    local backup_path="$1"
+    local backups=()
+    
+    echo -e "${BLUE}Available backups:${NC}"
+    
+    # Find all backup directories
+    while IFS= read -r dir; do
+        if [ -f "$dir/open-webui-data.tar.gz" ]; then
+            backups+=("$dir")
+            echo "$((${#backups[@]}))) $(basename "$dir")"
+        fi
+    done < <(find "$backup_path" -type d -name "open-webui_backup_*" | sort -r)
+    
+    if [ ${#backups[@]} -eq 0 ]; then
+        echo "No backups found in $backup_path"
+        exit 1
+    fi
+    
+    # Let user select a backup
+    read -p "Select backup to restore (1-${#backups[@]}): " selection
+    
+    if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -ge 1 ] && [ "$selection" -le "${#backups[@]}" ]; then
+        local selected_backup="${backups[$((selection-1))]}/open-webui-data.tar.gz"
+        restore_backup "$selected_backup"
+    else
+        echo -e "${RED}Invalid selection${NC}"
+        exit 1
+    fi
+}
+
 # Function to validate SMB path
 validate_smb_path() {
     local path="$1"
@@ -171,47 +254,89 @@ backup_wizard() {
     # Check dependencies first
     check_dependencies
     
-    # Backup frequency
-    echo -e "\nSelect backup frequency:"
-    echo "1) One-time backup"
-    echo "2) Weekly backup"
-    echo "3) Monthly backup"
-    read -p "Enter your choice (1-3): " frequency_choice
+    # Operation selection
+    echo -e "\nSelect operation:"
+    echo "1) Create backup"
+    echo "2) Restore from backup"
+    read -p "Enter your choice (1-2): " operation_choice
     
-    # Backup location
-    echo -e "\nSelect backup location:"
-    echo "1) Local directory"
-    echo "2) SMB share"
-    read -p "Enter your choice (1-2): " location_choice
-    
-    # Setup backup path
-    backup_path=""
-    case $location_choice in
+    case $operation_choice in
         1)
-            backup_path="$LOCAL_BACKUP_BASE"
-            mkdir -p "$backup_path"
+            # Backup frequency
+            echo -e "\nSelect backup frequency:"
+            echo "1) One-time backup"
+            echo "2) Weekly backup"
+            echo "3) Monthly backup"
+            read -p "Enter your choice (1-3): " frequency_choice
+            
+            # Backup location
+            echo -e "\nSelect backup location:"
+            echo "1) Local directory"
+            echo "2) SMB share"
+            read -p "Enter your choice (1-2): " location_choice
+            
+            # Setup backup path
+            backup_path=""
+            case $location_choice in
+                1)
+                    backup_path="$LOCAL_BACKUP_BASE"
+                    mkdir -p "$backup_path"
+                    ;;
+                2)
+                    backup_path=$(setup_smb_mount)
+                    ;;
+                *)
+                    echo -e "${RED}Invalid choice${NC}"
+                    exit 1
+                    ;;
+            esac
+            
+            # Handle backup frequency
+            case $frequency_choice in
+                1)
+                    create_backup "$backup_path"
+                    ;;
+                2)
+                    setup_schedule "weekly" "$backup_path"
+                    create_backup "$backup_path" # Initial backup
+                    ;;
+                3)
+                    setup_schedule "monthly" "$backup_path"
+                    create_backup "$backup_path" # Initial backup
+                    ;;
+                *)
+                    echo -e "${RED}Invalid choice${NC}"
+                    exit 1
+                    ;;
+            esac
             ;;
         2)
-            backup_path=$(setup_smb_mount)
-            ;;
-        *)
-            echo -e "${RED}Invalid choice${NC}"
-            exit 1
-            ;;
-    esac
-    
-    # Handle backup frequency
-    case $frequency_choice in
-        1)
-            create_backup "$backup_path"
-            ;;
-        2)
-            setup_schedule "weekly" "$backup_path"
-            create_backup "$backup_path" # Initial backup
-            ;;
-        3)
-            setup_schedule "monthly" "$backup_path"
-            create_backup "$backup_path" # Initial backup
+            # Restore location
+            echo -e "\nSelect restore location:"
+            echo "1) Local directory"
+            echo "2) SMB share"
+            read -p "Enter your choice (1-2): " location_choice
+            
+            # Setup restore path
+            restore_path=""
+            case $location_choice in
+                1)
+                    restore_path="$LOCAL_BACKUP_BASE"
+                    if [ ! -d "$restore_path" ]; then
+                        echo -e "${RED}No local backups found${NC}"
+                        exit 1
+                    fi
+                    ;;
+                2)
+                    restore_path=$(setup_smb_mount)
+                    ;;
+                *)
+                    echo -e "${RED}Invalid choice${NC}"
+                    exit 1
+                    ;;
+            esac
+            
+            list_backups "$restore_path"
             ;;
         *)
             echo -e "${RED}Invalid choice${NC}"

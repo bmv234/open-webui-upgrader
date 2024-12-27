@@ -32,16 +32,19 @@ Usage:
 ./update-open-webui-ollama-host-network.sh
 ```
 
-### 3. Backup Script (`backup-open-webui.sh`)
-Provides flexible backup options for Open WebUI data.
+### 3. Backup & Restore Script (`backup-restore-open-webui.sh`)
+Provides flexible backup and restore options for Open WebUI data.
 
 Features:
 - Wizard-style interface
+- Backup operations:
+  - Create new backups
+  - Restore from existing backups
 - Multiple backup frequencies:
   - One-time backup
   - Weekly backups (Sundays at midnight)
   - Monthly backups (1st of each month)
-- Backup location options:
+- Storage location options:
   - Local directory
   - SMB network share
 - Secure credential handling
@@ -49,7 +52,7 @@ Features:
 
 Usage:
 ```bash
-./backup-open-webui.sh
+./backup-restore-open-webui.sh
 ```
 
 ## Requirements
@@ -86,15 +89,74 @@ Choose the appropriate update script based on your Ollama setup:
 - If Ollama is in a container: Use `update-open-webui.sh`
 - If Ollama is on host: Use `update-open-webui-ollama-host-network.sh`
 
-### Setting Up Automated Backups
-1. Run the backup script:
+### Using the Backup & Restore Wizard
+
+The script provides an interactive wizard interface for both backup and restore operations.
+
+#### Creating Backups
+
+1. Run the backup & restore script:
    ```bash
-   ./backup-open-webui.sh
+   ./backup-restore-open-webui.sh
    ```
-2. Follow the wizard prompts:
-   - Choose backup frequency
-   - Select backup location
-   - Provide necessary credentials (for SMB)
+
+2. Select "Create backup" from the wizard menu
+
+3. Choose backup frequency:
+   - One-time backup: Creates a single backup immediately
+   - Weekly backup: Schedules backups every Sunday at midnight
+   - Monthly backup: Schedules backups on the 1st of each month
+
+4. Select backup location:
+   - Local directory: Stores backups in $HOME/open-webui-backups
+   - SMB share: Stores backups on a network share
+
+5. If SMB share selected:
+   - Enter share path (format: //hostname_or_ip/share_name)
+   - Provide username and password
+   - Optionally enter domain name
+   - Credentials are stored securely
+
+6. For scheduled backups:
+   - Creates initial backup immediately
+   - Sets up cron job for future backups
+   - Verifies cron setup
+
+#### Restoring from Backup
+
+1. Run the backup & restore script:
+   ```bash
+   ./backup-restore-open-webui.sh
+   ```
+
+2. Select "Restore from backup" from the wizard menu
+
+3. Choose backup location:
+   - Local directory: Lists backups from $HOME/open-webui-backups
+   - SMB share: Lists backups from configured network share
+
+4. If SMB share selected:
+   - Enter share details (same as backup process)
+   - System will mount the share and list available backups
+
+5. Select backup to restore:
+   - Backups are listed chronologically
+   - Each backup shows its creation timestamp
+   - Most recent backup appears first
+
+6. Review and confirm:
+   - Warning displayed about data overwrite
+   - Shows selected backup details
+   - Requires typing 'yes' to proceed
+   - Easy cancellation available
+
+Important Notes:
+- The restore process will overwrite all existing Open WebUI data
+- Any changes made since the selected backup will be lost
+- Container is automatically stopped during restore
+- Data is safely restored from backup
+- Container is restarted after restore completes
+- Make sure to carefully review the backup date before confirming
 
 ### Checking Backup Status
 - Local backups: Check `$HOME/open-webui-backups`
