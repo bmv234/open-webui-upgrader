@@ -123,7 +123,19 @@ restore_backup() {
     # Restart the container if it was running
     if docker ps -a | grep -q "$WEBUI_CONTAINER"; then
         echo "Starting Open WebUI container..."
-        docker start "$WEBUI_CONTAINER"
+        # Wait a moment for the port to be fully released
+        sleep 2
+        if ! docker start "$WEBUI_CONTAINER"; then
+            echo -e "${RED}Failed to start container. Waiting longer for port to be released...${NC}"
+            sleep 5
+            if ! docker start "$WEBUI_CONTAINER"; then
+                echo -e "${RED}Still unable to start container. You may need to:${NC}"
+                echo "1. Check if any process is using port 3000: sudo lsof -i :3000"
+                echo "2. Stop the process if needed"
+                echo "3. Then manually start the container: docker start $WEBUI_CONTAINER"
+                exit 1
+            fi
+        fi
     fi
     
     echo -e "${GREEN}✅ Restore completed successfully!${NC}"
@@ -233,6 +245,9 @@ setup_schedule() {
     local script_path="$(realpath "$0")"
     
     case "$backup_type" in
+        "daily")
+            schedule="0 0 * * *" # Every day at midnight
+            ;;
         "weekly")
             schedule="0 0 * * 0" # Every Sunday at midnight
             ;;
@@ -265,9 +280,10 @@ backup_wizard() {
             # Backup frequency
             echo -e "\nSelect backup frequency:"
             echo "1) One-time backup"
-            echo "2) Weekly backup"
-            echo "3) Monthly backup"
-            read -p "Enter your choice (1-3): " frequency_choice
+            echo "2) Daily backup"
+            echo "3) Weekly backup"
+            echo "4) Monthly backup"
+            read -p "Enter your choice (1-4): " frequency_choice
             
             # Backup location
             echo -e "\nSelect backup location:"
@@ -297,10 +313,14 @@ backup_wizard() {
                     create_backup "$backup_path"
                     ;;
                 2)
-                    setup_schedule "weekly" "$backup_path"
+                    setup_schedule "daily" "$backup_path"
                     create_backup "$backup_path" # Initial backup
                     ;;
                 3)
+                    setup_schedule "weekly" "$backup_path"
+                    create_backup "$backup_path" # Initial backup
+                    ;;
+                4)
                     setup_schedule "monthly" "$backup_path"
                     create_backup "$backup_path" # Initial backup
                     ;;
