@@ -65,13 +65,20 @@ create_backup() {
     # Backup open-webui data
     if docker volume ls | grep -q "open-webui"; then
         echo "Backing up open-webui data..."
-        docker run --rm \
+        # Escape spaces and special characters in backup_dir
+        local escaped_backup_dir=$(printf %q "$backup_dir")
+        eval "docker run --rm \
             -v open-webui:/data \
-            -v "$backup_dir":/backup \
-            alpine tar czf /backup/open-webui-data.tar.gz -C /data ./
+            -v ${escaped_backup_dir}:/backup \
+            alpine tar czf /backup/open-webui-data.tar.gz -C /data ./"
         
-        echo -e "${GREEN}✅ Backup completed successfully!${NC}"
-        echo "Backup location: $backup_dir"
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✅ Backup completed successfully!${NC}"
+            echo "Backup location: $backup_dir"
+        else
+            echo -e "${RED}Error: Backup failed${NC}"
+            exit 1
+        fi
     else
         echo -e "${RED}Error: open-webui volume not found${NC}"
         exit 1
@@ -115,10 +122,18 @@ restore_backup() {
     
     # Restore the backup
     echo "Restoring data..."
-    docker run --rm \
+    # Escape spaces and special characters in backup_file path
+    local escaped_backup_dir=$(printf %q "$(dirname "$backup_file")")
+    local escaped_backup_name=$(printf %q "$(basename "$backup_file")")
+    eval "docker run --rm \
         -v open-webui:/data \
-        -v "$(dirname "$backup_file")":/backup \
-        alpine sh -c "cd /data && tar xzf /backup/$(basename "$backup_file")"
+        -v ${escaped_backup_dir}:/backup \
+        alpine sh -c 'cd /data && tar xzf /backup/${escaped_backup_name}'"
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: Restore failed${NC}"
+        exit 1
+    fi
     
     # Restart the container if it was running
     if docker ps -a | grep -q "$WEBUI_CONTAINER"; then
@@ -187,12 +202,11 @@ validate_smb_path() {
 
 # Function to setup SMB mount
 setup_smb_mount() {
-    echo -e "${BLUE}Please enter SMB share details:${NC}"
-    echo "Format: //hostname_or_ip/share_name"
-    echo "Example: //192.168.1.100/backups"
+    local mount_point="/mnt/open-webui-backup"
     
+    # Get SMB details without printing format info first
     while true; do
-        read -p "SMB Share Path: " smb_path
+        read -p "SMB Share Path (//hostname/share): " smb_path
         if validate_smb_path "$smb_path"; then
             break
         fi
@@ -205,8 +219,7 @@ setup_smb_mount() {
     # Optional domain input
     read -p "Domain (press Enter to skip): " smb_domain
     
-    # Create mount point
-    local mount_point="/mnt/open-webui-backup"
+    # Create mount point if it doesn't exist
     sudo mkdir -p "$mount_point"
     
     # Store credentials securely
@@ -231,10 +244,32 @@ setup_smb_mount() {
         echo "$fstab_entry" | sudo tee -a /etc/fstab > /dev/null
     fi
     
-    # Mount the share
-    sudo mount -a
+    # Unmount if already mounted
+    if mountpoint -q "$mount_point"; then
+        sudo umount "$mount_point" || {
+            echo -e "${RED}Error: Failed to unmount existing share${NC}"
+            exit 1
+        }
+    fi
     
-    echo "$mount_point"
+    # Mount the share
+    echo "Mounting SMB share..."
+    if ! sudo mount -a; then
+        echo -e "${RED}Error: Failed to mount SMB share${NC}"
+        echo "Please check your credentials and network connectivity"
+        exit 1
+    fi
+    
+    # Create backup directory structure
+    local backup_base="$mount_point/open-webui-backups"
+    sudo mkdir -p "$backup_base"
+    
+    if [ ! -d "$backup_base" ]; then
+        echo -e "${RED}Error: Failed to create backup directory in SMB share${NC}"
+        exit 1
+    fi
+    
+    echo "$backup_base"
 }
 
 # Function to setup backup schedule
