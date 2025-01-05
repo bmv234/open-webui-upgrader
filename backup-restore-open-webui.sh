@@ -59,26 +59,24 @@ create_backup() {
     
     echo -e "${BLUE}Creating backup in: $backup_dir${NC}"
     
-    # Create backup directory
-    mkdir -p "$backup_dir"
-    
     # Backup open-webui data
     if docker volume ls | grep -q "open-webui"; then
-        echo "Backing up open-webui data..."
-        # Escape spaces and special characters in backup_dir
-        local escaped_backup_dir=$(printf %q "$backup_dir")
-        eval "docker run --rm \
-            -v open-webui:/data \
-            -v ${escaped_backup_dir}:/backup \
-            alpine tar czf /backup/open-webui-data.tar.gz -C /data ./"
+        echo -e "${BLUE}Backing up open-webui data...${NC}"
+        # Create backup directory with proper permissions
+        sudo mkdir -p "$backup_dir"
         
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ Backup completed successfully!${NC}"
-            echo "Backup location: $backup_dir"
-        else
-            echo -e "${RED}Error: Backup failed${NC}"
-            exit 1
-        fi
+        # Get Docker volume path
+        local volume_path=$(docker volume inspect open-webui --format '{{ .Mountpoint }}')
+        
+        # Create backup using native tar
+        echo -e "${BLUE}Creating backup from $volume_path...${NC}"
+        sudo tar czf "$backup_dir/open-webui-data.tar.gz" -C "$volume_path" .
+        
+        # Set proper permissions for the backup
+        sudo chown $USER:$USER "$backup_dir/open-webui-data.tar.gz"
+        
+        echo -e "${GREEN}✅ Backup completed successfully!${NC}"
+        echo -e "${GREEN}Backup location: $backup_dir${NC}"
     else
         echo -e "${RED}Error: open-webui volume not found${NC}"
         exit 1
@@ -101,7 +99,7 @@ restore_backup() {
     read -p "Are you sure you want to proceed with the restore? (yes/no): " confirm
     
     if [[ ! "$confirm" =~ ^[Yy][Ee][Ss]$ ]]; then
-        echo "Restore cancelled."
+        echo -e "${BLUE}Restore cancelled.${NC}"
         exit 0
     fi
     
@@ -110,25 +108,30 @@ restore_backup() {
     
     # Stop the container if it's running
     if docker ps | grep -q "$WEBUI_CONTAINER"; then
-        echo "Stopping Open WebUI container..."
+        echo -e "${BLUE}Stopping Open WebUI container...${NC}"
         docker stop "$WEBUI_CONTAINER"
     fi
     
     # Create a new volume if it doesn't exist
     if ! docker volume ls | grep -q "open-webui"; then
-        echo "Creating new volume..."
+        echo -e "${BLUE}Creating new volume...${NC}"
         docker volume create open-webui
     fi
     
     # Restore the backup
-    echo "Restoring data..."
-    # Escape spaces and special characters in backup_file path
-    local escaped_backup_dir=$(printf %q "$(dirname "$backup_file")")
-    local escaped_backup_name=$(printf %q "$(basename "$backup_file")")
-    eval "docker run --rm \
-        -v open-webui:/data \
-        -v ${escaped_backup_dir}:/backup \
-        alpine sh -c 'cd /data && tar xzf /backup/${escaped_backup_name}'"
+    echo -e "${BLUE}Restoring data...${NC}"
+    # Get Docker volume path
+    local volume_path=$(docker volume inspect open-webui --format '{{ .Mountpoint }}')
+    
+    # Clear existing data
+    sudo rm -rf "$volume_path"/*
+    
+    # Restore from backup using native tar
+    echo -e "${BLUE}Restoring from backup to $volume_path...${NC}"
+    sudo tar xzf "$backup_file" -C "$volume_path"
+    
+    # Fix permissions
+    sudo chown -R root:root "$volume_path"
     
     if [ $? -ne 0 ]; then
         echo -e "${RED}Error: Restore failed${NC}"
@@ -137,7 +140,7 @@ restore_backup() {
     
     # Restart the container if it was running
     if docker ps -a | grep -q "$WEBUI_CONTAINER"; then
-        echo "Starting Open WebUI container..."
+        echo -e "${BLUE}Starting Open WebUI container...${NC}"
         # Wait a moment for the port to be fully released
         sleep 2
         if ! docker start "$WEBUI_CONTAINER"; then
@@ -145,9 +148,9 @@ restore_backup() {
             sleep 5
             if ! docker start "$WEBUI_CONTAINER"; then
                 echo -e "${RED}Still unable to start container. You may need to:${NC}"
-                echo "1. Check if any process is using port 3000: sudo lsof -i :3000"
-                echo "2. Stop the process if needed"
-                echo "3. Then manually start the container: docker start $WEBUI_CONTAINER"
+                echo -e "${RED}1. Check if any process is using port 3000: sudo lsof -i :3000${NC}"
+                echo -e "${RED}2. Stop the process if needed${NC}"
+                echo -e "${RED}3. Then manually start the container: docker start $WEBUI_CONTAINER${NC}"
                 exit 1
             fi
         fi
@@ -167,12 +170,12 @@ list_backups() {
     while IFS= read -r dir; do
         if [ -f "$dir/open-webui-data.tar.gz" ]; then
             backups+=("$dir")
-            echo "$((${#backups[@]}))) $(basename "$dir")"
+            echo -e "${BLUE}$((${#backups[@]}))) $(basename "$dir")${NC}"
         fi
     done < <(find "$backup_path" -type d -name "open-webui_backup_*" | sort -r)
     
     if [ ${#backups[@]} -eq 0 ]; then
-        echo "No backups found in $backup_path"
+        echo -e "${RED}No backups found in $backup_path${NC}"
         exit 1
     fi
     
@@ -253,10 +256,10 @@ setup_smb_mount() {
     fi
     
     # Mount the share
-    echo "Mounting SMB share..."
+    echo -e "${BLUE}Mounting SMB share...${NC}"
     if ! sudo mount -a; then
         echo -e "${RED}Error: Failed to mount SMB share${NC}"
-        echo "Please check your credentials and network connectivity"
+        echo -e "${RED}Please check your credentials and network connectivity${NC}"
         exit 1
     fi
     
@@ -269,6 +272,7 @@ setup_smb_mount() {
         exit 1
     fi
     
+    echo -e "${GREEN}SMB share mounted at: $backup_base${NC}"
     echo "$backup_base"
 }
 
@@ -407,10 +411,10 @@ if [ "$1" == "--auto-backup" ]; then
     create_backup "$backup_path"
 else
     # Interactive wizard mode
-    echo "Checking Docker..."
+    echo -e "${BLUE}Checking Docker...${NC}"
     check_docker
     
-    echo "Checking existing container..."
+    echo -e "${BLUE}Checking existing container...${NC}"
     check_container
     
     backup_wizard
