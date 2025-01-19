@@ -32,13 +32,79 @@ check_container() {
     fi
 }
 
-# Function to check if ollama is running locally
-check_ollama() {
+# Function to detect Ollama running mode
+detect_ollama_mode() {
+    # First check if Ollama is running as a container
+    if docker ps --format '{{.Names}}' | grep -q "^ollama$"; then
+        echo "container"
+        return
+    fi
+    
+    # Then check if it's running locally
+    if curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
+        echo "local"
+        return
+    fi
+    
+    echo -e "${RED}Error: Ollama is not running either locally or in a container${NC}"
+    echo -e "${RED}Please ensure Ollama is running before updating Open WebUI${NC}"
+    exit 1
+}
+
+# Function to update local Ollama installation
+update_local_ollama() {
+    echo -e "${BLUE}Updating local Ollama installation...${NC}"
+    curl -fsSL https://ollama.com/install.sh | sh
+    
+    # Verify update
     if ! curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
-        echo -e "${RED}Error: Ollama is not running on localhost:11434${NC}"
-        echo -e "${RED}Please ensure Ollama is running before updating Open WebUI${NC}"
+        echo -e "${RED}Error: Ollama update failed or service not running${NC}"
         exit 1
     fi
+    echo -e "${GREEN}✅ Ollama updated successfully${NC}"
+}
+
+# Function to update containerized Ollama
+update_container_ollama() {
+    echo -e "${BLUE}Updating Ollama container...${NC}"
+    
+    # Stop the container
+    echo -e "${BLUE}Stopping Ollama container...${NC}"
+    docker stop ollama
+    
+    # Remove the container but keep the volume
+    echo -e "${BLUE}Removing old container...${NC}"
+    docker rm ollama
+    
+    # Pull latest image
+    echo -e "${BLUE}Pulling latest Ollama image...${NC}"
+    if command -v nvidia-smi &> /dev/null; then
+        docker pull ollama/ollama
+        # Start with GPU support
+        docker run -d --gpus=all -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+    else
+        docker pull ollama/ollama
+        # Start without GPU support
+        docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+    fi
+    
+    # Wait for container to start
+    echo -e "${BLUE}Waiting for Ollama container to start...${NC}"
+    sleep 5
+    
+    # Verify container is running
+    if ! docker ps | grep -q "ollama"; then
+        echo -e "${RED}Error: Ollama container failed to start${NC}"
+        exit 1
+    fi
+    
+    # Verify API is responding
+    if ! curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
+        echo -e "${RED}Error: Ollama API not responding after container start${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Ollama container updated successfully${NC}"
 }
 
 # Function to check GPU support
@@ -90,8 +156,20 @@ main() {
     echo -e "${BLUE}Checking existing container...${NC}"
     check_container
     
-    echo -e "${BLUE}Checking Ollama service...${NC}"
-    check_ollama
+    echo -e "${BLUE}Detecting Ollama installation type...${NC}"
+    OLLAMA_MODE=$(detect_ollama_mode)
+    
+    # Update Ollama based on installation type
+    case $OLLAMA_MODE in
+        "local")
+            echo -e "${BLUE}Found local Ollama installation${NC}"
+            update_local_ollama
+            ;;
+        "container")
+            echo -e "${BLUE}Found containerized Ollama${NC}"
+            update_container_ollama
+            ;;
+    esac
     
     # Check GPU support
     check_gpu_support
@@ -99,11 +177,11 @@ main() {
     # Backup existing data
     backup_volume
     
-    echo -e "${BLUE}Stopping container...${NC}"
+    echo -e "${BLUE}Stopping Open WebUI container...${NC}"
     docker stop $WEBUI_CONTAINER || true
     docker rm $WEBUI_CONTAINER || true
     
-    echo -e "${BLUE}Pulling latest image...${NC}"
+    echo -e "${BLUE}Pulling latest Open WebUI image...${NC}"
     docker pull $WEBUI_IMAGE
     
     echo -e "${BLUE}Starting Open WebUI container...${NC}"
@@ -125,6 +203,7 @@ main() {
         echo -e "${GREEN}✅ Update completed successfully!${NC}"
         echo -e "${GREEN}✅ Persistent data has been preserved and reattached${NC}"
         echo -e "${GREEN}✅ Backup created in $BACKUP_DIR${NC}"
+        echo -e "${GREEN}✅ Ollama updated successfully (${OLLAMA_MODE} mode)${NC}"
         if [ ! -z "$GPU_ARGS" ]; then
             echo -e "${GREEN}✅ GPU support enabled${NC}"
         fi
