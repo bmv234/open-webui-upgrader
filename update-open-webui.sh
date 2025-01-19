@@ -32,16 +32,41 @@ check_container() {
     fi
 }
 
+# Function to verify Ollama is running
+verify_ollama_running() {
+    local attempt=1
+    local max_attempts=5
+    
+    while [ $attempt -le $max_attempts ]; do
+        echo -e "${BLUE}Checking if Ollama is running (attempt $attempt of $max_attempts)...${NC}"
+        
+        if curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
+            return 0
+        fi
+        
+        if [ $attempt -lt $max_attempts ]; then
+            echo -e "${YELLOW}Ollama not responding, waiting 10 seconds before next attempt...${NC}"
+            sleep 10
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    return 1
+}
+
 # Function to detect Ollama running mode
 detect_ollama_mode() {
     # First check if Ollama is running as a container
     if docker ps --format '{{.Names}}' | grep -q "^ollama$"; then
-        echo "container"
-        return
+        if verify_ollama_running; then
+            echo "container"
+            return
+        fi
     fi
     
     # Then check if it's running locally
-    if curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
+    if verify_ollama_running; then
         echo "local"
         return
     fi
@@ -56,9 +81,9 @@ update_local_ollama() {
     echo -e "${BLUE}Updating local Ollama installation...${NC}"
     curl -fsSL https://ollama.com/install.sh | sh
     
-    # Verify update
-    if ! curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
-        echo -e "${RED}Error: Ollama update failed or service not running${NC}"
+    echo -e "${BLUE}Verifying Ollama installation...${NC}"
+    if ! verify_ollama_running; then
+        echo -e "${RED}Error: Ollama update failed or service not running after 5 attempts${NC}"
         exit 1
     fi
     echo -e "${GREEN}✅ Ollama updated successfully${NC}"
@@ -88,23 +113,29 @@ update_container_ollama() {
         docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
     fi
     
-    # Wait for container to start
-    echo -e "${BLUE}Waiting for Ollama container to start...${NC}"
-    sleep 5
-    
     # Verify container is running
-    if ! docker ps | grep -q "ollama"; then
-        echo -e "${RED}Error: Ollama container failed to start${NC}"
-        exit 1
-    fi
+    echo -e "${BLUE}Verifying Ollama container...${NC}"
+    local attempt=1
+    local max_attempts=5
     
-    # Verify API is responding
-    if ! curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
-        echo -e "${RED}Error: Ollama API not responding after container start${NC}"
-        exit 1
-    fi
+    while [ $attempt -le $max_attempts ]; do
+        echo -e "${BLUE}Checking container status (attempt $attempt of $max_attempts)...${NC}"
+        
+        if docker ps | grep -q "ollama" && verify_ollama_running; then
+            echo -e "${GREEN}✅ Ollama container updated successfully${NC}"
+            return
+        fi
+        
+        if [ $attempt -lt $max_attempts ]; then
+            echo -e "${YELLOW}Container not ready, waiting 10 seconds before next attempt...${NC}"
+            sleep 10
+        fi
+        
+        attempt=$((attempt + 1))
+    done
     
-    echo -e "${GREEN}✅ Ollama container updated successfully${NC}"
+    echo -e "${RED}Error: Ollama container failed to start properly after 5 attempts${NC}"
+    exit 1
 }
 
 # Function to check GPU support
