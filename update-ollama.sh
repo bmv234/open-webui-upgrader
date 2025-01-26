@@ -19,110 +19,78 @@ check_docker() {
     fi
 }
 
-# Function to verify Ollama is running
+# Function to verify Ollama API is responding
 verify_ollama_running() {
-    local attempt=1
     local max_attempts=5
+    local attempt=1
     
     while [ $attempt -le $max_attempts ]; do
-        echo -e "${BLUE}Checking if Ollama is running (attempt $attempt of $max_attempts)...${NC}"
-        
         if curl -s http://localhost:11434/api/version >/dev/null 2>&1; then
             return 0
         fi
-        
-        if [ $attempt -lt $max_attempts ]; then
-            echo -e "${YELLOW}Ollama not responding, waiting 10 seconds before next attempt...${NC}"
-            sleep 10
-        fi
-        
+        sleep 2
         attempt=$((attempt + 1))
     done
     
     return 1
 }
 
+# Function to wait for Ollama to be ready
+wait_for_ollama() {
+    echo -e "${BLUE}Waiting for Ollama to start...${NC}"
+    if verify_ollama_running; then
+        echo -e "${GREEN}✅ Ollama is responding${NC}"
+        return 0
+    else
+        echo -e "${RED}Error: Ollama failed to respond after update${NC}"
+        return 1
+    fi
+}
+
 # Function to detect Ollama running mode
 detect_ollama_mode() {
-    # First check if Ollama is running as a container
-    if docker ps --format '{{.Names}}' | grep -q "^ollama$"; then
-        if verify_ollama_running; then
-            echo "container"
-            return
-        fi
-    fi
-    
-    # Then check if it's running locally
-    if verify_ollama_running; then
-        echo "local"
+    # Check if Ollama container exists (running or not)
+    if docker ps -a --format '{{.Names}}' | grep -q "^ollama$"; then
+        echo "container"
         return
     fi
     
-    echo -e "${RED}Error: Ollama is not running either locally or in a container${NC}"
-    echo -e "${RED}Please ensure Ollama is running before updating${NC}"
-    exit 1
+    # Default to local mode if no container found
+    echo "local"
+    return
 }
 
 # Function to update local Ollama installation
 update_local_ollama() {
     echo -e "${BLUE}Updating local Ollama installation...${NC}"
-    curl -fsSL https://ollama.com/install.sh | sh
-    
-    echo -e "${BLUE}Verifying Ollama installation...${NC}"
-    if ! verify_ollama_running; then
-        echo -e "${RED}Error: Ollama update failed or service not running after 5 attempts${NC}"
+    if ! curl -fsSL https://ollama.com/install.sh | sh; then
+        echo -e "${RED}Error: Failed to download or run Ollama installer${NC}"
         exit 1
     fi
-    echo -e "${GREEN}✅ Ollama updated successfully${NC}"
 }
 
 # Function to update containerized Ollama
 update_container_ollama() {
     echo -e "${BLUE}Updating Ollama container...${NC}"
     
-    # Stop the container
-    echo -e "${BLUE}Stopping Ollama container...${NC}"
-    docker stop ollama
-    
-    # Remove the container but keep the volume
-    echo -e "${BLUE}Removing old container...${NC}"
-    docker rm ollama
+    # Stop and remove existing container
+    docker stop ollama >/dev/null 2>&1 || true
+    docker rm ollama >/dev/null 2>&1 || true
     
     # Pull latest image
     echo -e "${BLUE}Pulling latest Ollama image...${NC}"
-    if command -v nvidia-smi &> /dev/null; then
-        docker pull ollama/ollama
-        # Start with GPU support
-        docker run -d --gpus=all -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
-    else
-        docker pull ollama/ollama
-        # Start without GPU support
-        docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+    if ! docker pull ollama/ollama; then
+        echo -e "${RED}Failed to pull latest Ollama image${NC}"
+        exit 1
     fi
-    
-    # Verify container is running
-    echo -e "${BLUE}Verifying Ollama container...${NC}"
-    local attempt=1
-    local max_attempts=5
-    
-    while [ $attempt -le $max_attempts ]; do
-        echo -e "${BLUE}Checking container status (attempt $attempt of $max_attempts)...${NC}"
-        
-        if docker ps | grep -q "ollama" && verify_ollama_running; then
-            echo -e "${GREEN}✅ Ollama container updated successfully${NC}"
-            return
-        fi
-        
-        if [ $attempt -lt $max_attempts ]; then
-            echo -e "${YELLOW}Container not ready, waiting 10 seconds before next attempt...${NC}"
-            sleep 10
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    echo -e "${RED}Error: Ollama container failed to start properly after 5 attempts${NC}"
-    exit 1
+
+    # Start container with appropriate GPU support
+    echo -e "${BLUE}Starting new container...${NC}"
+    if command -v nvidia-smi &> /dev/null; then
+        docker run -d --gpus=all -v ollama:/root/.ollama -p 11434:11434 --restart always --name ollama ollama/ollama >/dev/null
+    else
+        docker run -d -v ollama:/root/.ollama -p 11434:11434 --restart always --name ollama ollama/ollama >/dev/null
+    fi
 }
 
 # Main update process
@@ -138,10 +106,20 @@ main() {
         "local")
             echo -e "${BLUE}Found local Ollama installation${NC}"
             update_local_ollama
+            if ! wait_for_ollama; then
+                exit 1
+            fi
             ;;
         "container")
             echo -e "${BLUE}Found containerized Ollama${NC}"
             update_container_ollama
+            if ! wait_for_ollama; then
+                exit 1
+            fi
+            ;;
+        *)
+            echo -e "${RED}Error: Unknown Ollama installation type${NC}"
+            exit 1
             ;;
     esac
     

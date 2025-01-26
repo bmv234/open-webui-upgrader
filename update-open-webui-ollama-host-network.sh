@@ -13,8 +13,8 @@ echo -e "${BLUE}Starting Open WebUI update process...${NC}"
 
 # Configuration
 WEBUI_PORT=${OPEN_WEBUI_PORT:-3000}
-WEBUI_CONTAINER="open-webui"
 WEBUI_IMAGE="ghcr.io/open-webui/open-webui:cuda"
+# WEBUI_CONTAINER will be set by check_container function
 
 # Function to check if docker is running
 check_docker() {
@@ -24,12 +24,17 @@ check_docker() {
     fi
 }
 
-# Function to check if container exists
+# Function to check if container exists and get its name
 check_container() {
-    if ! docker ps -a --format '{{.Names}}' | grep -q "^$WEBUI_CONTAINER$"; then
-        echo -e "${RED}Error: $WEBUI_CONTAINER container not found${NC}"
+    # Find any container with "open-webui" in its name
+    WEBUI_CONTAINER=$(docker ps -a --format '{{.Names}}' | grep -i "open-webui" | head -n1)
+    
+    if [ -z "$WEBUI_CONTAINER" ]; then
+        echo -e "${RED}Error: No Open WebUI container found${NC}"
         exit 1
     fi
+    
+    echo -e "${BLUE}Found container: $WEBUI_CONTAINER${NC}"
 }
 
 # Function to verify Ollama is running
