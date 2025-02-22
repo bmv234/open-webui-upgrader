@@ -272,10 +272,14 @@ restore_backup() {
     echo -e "${GREEN}✅ Restore completed successfully!${NC}"
     
     # Cleanup SMB mount if used
-    if mountpoint -q "$TEMP_MOUNT"; then
+    if [ -d "$TEMP_MOUNT" ]; then
         echo -e "${BLUE}Cleaning up SMB mount...${NC}"
-        sudo umount "$TEMP_MOUNT"
-        sudo rmdir "$TEMP_MOUNT"
+        if mountpoint -q "$TEMP_MOUNT"; then
+            sudo umount "$TEMP_MOUNT"
+        fi
+        if [ -d "$TEMP_MOUNT" ]; then
+            sudo rmdir "$TEMP_MOUNT"
+        fi
     fi
 }
 
@@ -293,10 +297,10 @@ list_backups() {
             backups+=("$file")
             echo -e "${BLUE}$((${#backups[@]}))) $(basename "$file")${NC}"
         fi
-    done < <(find "$backup_path" -maxdepth 1 -type f -name "open-webui-backup-*.tar.gz" | sort -r)
+    done < <(find "$backup_path" -maxdepth 1 -type f -name "open-webui-backup-*.tar.gz" 2>/dev/null | sort -r)
     
     if [ ${#backups[@]} -eq 0 ]; then
-        echo -e "${RED}No backups found in $backup_path${NC}"
+        echo -e "${RED}No backups found in\n\n$backup_path${NC}"
         exit 1
     fi
     
@@ -350,12 +354,29 @@ test_smb_access() {
         return 1
     fi
 
+    # Check/Create backup directory first
+    local backup_dir="$TEMP_MOUNT/open-webui-backups"
+    echo -e "${BLUE}Checking backup directory: $backup_dir${NC}" >&2
+    
+    if [ -d "$backup_dir" ]; then
+        echo -e "${GREEN}✓ Backup directory exists${NC}" >&2
+    else
+        echo -e "${BLUE}Creating backup directory...${NC}" >&2
+        if ! mkdir -p "$backup_dir"; then
+            echo -e "${RED}Error: Failed to create backup directory${NC}" >&2
+            sudo umount "$TEMP_MOUNT"
+            sudo rmdir "$TEMP_MOUNT"
+            return 1
+        fi
+        echo -e "${GREEN}✓ Backup directory created${NC}" >&2
+    fi
+
     # Test write access with a test file
     echo -e "${BLUE}Testing write access to SMB share...${NC}" >&2
     local test_content="SMB write test - $(date)"
     
-    # Try to write test file
-    if ! echo "$test_content" > "$TEMP_MOUNT/test.txt"; then
+    # Try to write test file in the backup directory
+    if ! echo "$test_content" > "$backup_dir/test.txt"; then
         echo -e "${RED}Error: Cannot write test file to SMB share${NC}" >&2
         sudo umount "$TEMP_MOUNT"
         sudo rmdir "$TEMP_MOUNT"
@@ -363,7 +384,7 @@ test_smb_access() {
     fi
     
     # Verify test file exists and content matches
-    if [ ! -f "$TEMP_MOUNT/test.txt" ]; then
+    if [ ! -f "$backup_dir/test.txt" ]; then
         echo -e "${RED}Error: Test file not found - write verification failed${NC}" >&2
         sudo umount "$TEMP_MOUNT"
         sudo rmdir "$TEMP_MOUNT"
@@ -371,7 +392,7 @@ test_smb_access() {
     fi
     
     # Read back and verify content
-    local read_content=$(cat "$TEMP_MOUNT/test.txt")
+    local read_content=$(cat "$backup_dir/test.txt")
     if [ "$read_content" != "$test_content" ]; then
         echo -e "${RED}Error: Test file content verification failed${NC}" >&2
         rm -f "$TEMP_MOUNT/test.txt"
