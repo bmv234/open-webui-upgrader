@@ -238,13 +238,17 @@ main() {
     if docker ps | grep -q "$WEBUI_CONTAINER"; then
         echo -e "${GREEN}✅ Update completed successfully!${NC}"
         echo -e "${GREEN}✅ Persistent data has been preserved and reattached${NC}"
-        echo -e "${GREEN}✅ Backup created in $BACKUP_DIR${NC}"
         echo -e "${GREEN}✅ Ollama updated successfully (${OLLAMA_MODE} mode)${NC}"
         if [ ! -z "$GPU_ARGS" ]; then
             echo -e "${GREEN}✅ GPU support enabled${NC}"
         fi
         echo -e "${GREEN}✅ Connected to local Ollama service${NC}"
         echo -e "${BLUE}Open WebUI is running at: http://localhost:$WEBUI_PORT${NC}"
+
+        # Clean up backup after successful update
+        echo -e "${BLUE}Cleaning up temporary backup...${NC}"
+        sudo rm -rf "$BACKUP_DIR"
+        echo -e "${GREEN}✓ Temporary backup removed${NC}"
     else
         echo -e "${RED}❌ Error: Container failed to start properly${NC}"
         echo -e "${RED}Please check docker logs for more information:${NC}"
